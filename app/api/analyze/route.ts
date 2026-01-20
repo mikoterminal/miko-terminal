@@ -55,7 +55,7 @@ export async function POST(req: Request) {
 
     // 2. Kirim ke Claude (Otak Miko)
     const msg = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",, // Pastikan model ini sesuai yg abang pake (atau sonnet-4-20250514)
+      model: "claude-sonnet-4-20250514",
       max_tokens: 500,
       system: `You are Miko, an elite Crypto Analyst for Bags.fm. 
       Persona: Cyberpunk, mysterious, degen but smart, speaks English mixed with crypto slang (LFG, WAGMI, Rekt, Alpha).
