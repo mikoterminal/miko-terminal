@@ -9,8 +9,8 @@ const anthropic = new Anthropic({
 // Fungsi untuk ambil data harga dari DexScreener
 async function getMarketData(query: string) {
   try {
-    // Cari kata yang diawali simbol $ atau kata umum
-    const cleanQuery = query.replace(/[^a-zA-Z0-9 ]/g, "").split(" ")[0]; // Ambil kata pertama biar simpel
+    // Bersihkan query, ambil kata pertama
+    const cleanQuery = query.replace(/[^a-zA-Z0-9 ]/g, "").split(" ")[0]; 
     
     // Tembak API DexScreener
     const response = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${query}`);
@@ -54,8 +54,9 @@ export async function POST(req: Request) {
     }
 
     // 2. Kirim ke Claude (Otak Miko)
+    // PENTING: Model sudah diganti ke versi terbaru yang support
     const msg = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-20250514", 
       max_tokens: 500,
       system: `You are Miko, an elite Crypto Analyst for Bags.fm. 
       Persona: Cyberpunk, mysterious, degen but smart, speaks English mixed with crypto slang (LFG, WAGMI, Rekt, Alpha).
@@ -79,6 +80,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ reply: responseText });
   } catch (error) {
     console.error("Error:", error);
-    return NextResponse.json({ reply: "⚠️ Neural Link Error. Try again." }, { status: 500 });
+    return NextResponse.json({ reply: "⚠️ Neural Link Error. Check API Key or Model." }, { status: 500 });
   }
 }
