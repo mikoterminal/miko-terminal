@@ -1,34 +1,84 @@
-import { Anthropic } from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
+import Anthropic from "@anthropic-ai/sdk";
 
+// Inisialisasi Kunci Claude
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+// Fungsi untuk ambil data harga dari DexScreener
+async function getMarketData(query: string) {
+  try {
+    // Cari kata yang diawali simbol $ atau kata umum
+    const cleanQuery = query.replace(/[^a-zA-Z0-9 ]/g, "").split(" ")[0]; // Ambil kata pertama biar simpel
+    
+    // Tembak API DexScreener
+    const response = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${query}`);
+    const data = await response.json();
+
+    if (!data.pairs || data.pairs.length === 0) return null;
+
+    // Ambil pair paling liquid/populer
+    const bestPair = data.pairs[0];
+    
+    return `
+    [LIVE MARKET DATA]
+    Token: ${bestPair.baseToken.name} (${bestPair.baseToken.symbol})
+    Price: $${bestPair.priceUsd}
+    24h Change: ${bestPair.priceChange.h24}%
+    Volume 24h: $${bestPair.volume.h24}
+    Liquidity: $${bestPair.liquidity.usd}
+    DEX: ${bestPair.dexId}
+    URL: ${bestPair.url}
+    -----------------------
+    `;
+  } catch (error) {
+    console.error("Error fetching market data:", error);
+    return null;
+  }
+}
+
 export async function POST(req: Request) {
   try {
-    // 1. Terima pesan dari kamu
     const { message } = await req.json();
 
-    // 2. Miko mikir (Kirim ke Claude)
+    // 1. Cek Market Data dulu (Miko ngintip harga)
+    let marketContext = "";
+    // Kalau user ngetik simbol "$" atau tanya harga, kita cari datanya
+    if (message.includes("$") || message.toLowerCase().includes("price") || message.toLowerCase().includes("harga")) {
+       const extractedTerm = message.split(" ").find((word: string) => word.startsWith("$")) || message;
+       const data = await getMarketData(extractedTerm.replace("$", ""));
+       if (data) {
+         marketContext = data;
+       }
+    }
+
+    // 2. Kirim ke Claude (Otak Miko)
     const msg = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-3-5-sonnet-20241022", // Pastikan model ini sesuai yg abang pake (atau sonnet-4-20250514)
       max_tokens: 500,
-      // Ini kepribadian Miko:
-      system: "You are Miko, an advanced AI Analyst for Bags.fm. Persona: Cyberpunk, cool, mysterious, and sharp. Use crypto slang (Alpha, bags, whale, LFG, wagmi). STRICTLY speak in English only. Never speak Indonesian. Keep answers short and punchy.",
+      system: `You are Miko, an elite Crypto Analyst for Bags.fm. 
+      Persona: Cyberpunk, mysterious, degen but smart, speaks English mixed with crypto slang (LFG, WAGMI, Rekt, Alpha).
+      
+      INSTRUCTIONS:
+      1. If [LIVE MARKET DATA] is provided below, USE IT to analyze the token.
+      2. If the price is UP, be hyped. If DOWN, be cautious or sarcastic.
+      3. Keep answers short, punchy, and terminal-style.
+      4. Do NOT say "Based on the data provided". Just talk naturally like you checked the charts.
+      
+      ${marketContext ? `DATA FEED DETECTED:\n${marketContext}` : "No specific market data found, just chat casually."}`,
+      
       messages: [
-        { role: "user", content: message }
+        { role: "user", content: message },
       ],
     });
 
-    // 3. Ambil jawaban
-    // @ts-ignore
-    const text = msg.content[0].text;
-    
-    return NextResponse.json({ result: text });
-    
+    // Ambil text jawaban Claude
+    const responseText = (msg.content[0] as any).text;
+
+    return NextResponse.json({ reply: responseText });
   } catch (error) {
-    console.error(error);
-    return NextResponse.json({ result: "⚠️ Neural Link Offline. Check API Key." }, { status: 500 });
+    console.error("Error:", error);
+    return NextResponse.json({ reply: "⚠️ Neural Link Error. Try again." }, { status: 500 });
   }
 }
