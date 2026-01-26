@@ -1,36 +1,25 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 
-// Setup Claude
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// Fungsi Cek Market (DexScreener)
 async function getMarketData(query: string) {
   try {
-    // Bersihkan query
     const cleanQuery = query.trim().replace(/\$/g, "");
-    
-    // Cek ke DexScreener
     const response = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${cleanQuery}`);
     const data = await response.json();
-
     if (!data.pairs || data.pairs.length === 0) return null;
-
-    // Ambil pair terbaik (biasanya yang likuiditasnya paling tinggi)
     const pair = data.pairs[0];
     
     return `
-    [TERMINAL SCAN RESULT]
+    [SCAN RESULT]
     > PROJECT: ${pair.baseToken.name} (${pair.baseToken.symbol})
     > PRICE: $${pair.priceUsd}
-    > AGE: ${pair.pairCreatedAt ? new Date(pair.pairCreatedAt).toLocaleDateString() : "Unknown"}
-    > 24H CHG: ${pair.priceChange.h24}%
-    > VOL 24H: $${pair.volume.h24.toLocaleString()}
-    > LIQUIDITY: $${pair.liquidity.usd.toLocaleString()}
-    > DEX: ${pair.dexId}
-    > URL: ${pair.url}
+    > 24H: ${pair.priceChange.h24}%
+    > VOL: $${pair.volume.h24.toLocaleString()}
+    > LIQ: $${pair.liquidity.usd.toLocaleString()}
     `;
   } catch (e) { return null; }
 }
@@ -39,48 +28,47 @@ export async function POST(req: Request) {
   try {
     const { message } = await req.json();
     let systemData = "";
-    let detectedToken = "";
+    let isScanning = false; // Penanda apakah user lagi minta scan
 
-    // === LOGIKA BARU: DETEKSI CA SOLANA OTOMATIS ===
-    // Regex ini mendeteksi string panjang khas Solana Address (32-44 karakter)
+    // 1. Cek apakah ini CA (Solana Address)
     const solanaAddressRegex = /[1-9A-HJ-NP-Za-km-z]{32,44}/;
     const caMatch = message.match(solanaAddressRegex);
 
     if (caMatch) {
-      // KASUS 1: User kirim CA
-      detectedToken = caMatch[0];
-      const marketInfo = await getMarketData(detectedToken);
+      isScanning = true;
+      const marketInfo = await getMarketData(caMatch[0]);
       if (marketInfo) systemData = marketInfo;
-      
-    } else if (message.includes("$") || message.toLowerCase().includes("price") || message.toLowerCase().includes("analisa")) {
-      // KASUS 2: User kirim Ticker ($MIKO) atau tanya harga
+    } 
+    // 2. Cek apakah ini Ticker ($MIKO) atau keyword "price"
+    else if (message.includes("$") || message.toLowerCase().includes("price") || message.toLowerCase().includes("cek")) {
+      isScanning = true;
       const query = message.split(" ").find((w: string) => w.startsWith("$")) || message;
       const marketInfo = await getMarketData(query);
       if (marketInfo) systemData = marketInfo;
     }
 
-    // Status Koneksi (Visual)
-    const connectionStatus = process.env.BAGS_API_KEY ? "LINKED_TO_BAGS" : "STANDALONE";
+    // 3. Status Koneksi Bags
+    const bagsStatus = process.env.BAGS_API_KEY ? "ONLINE" : "OFFLINE";
 
-    // Panggil Otak AI (Claude)
+    // 4. LOGIKA AI YANG SUDAH DIPERBAIKI
+    const systemPrompt = `
+      You are Miko, an AI Terminal Agent on Solana.
+      STATUS: Bags Network ${bagsStatus}
+
+      RULES:
+      1. If [SCAN RESULT] is present below: Analyze the data like a pro trader. Be critical.
+      2. If [SCAN RESULT] is MISSING but user asked to scan (e.g. sent a CA): Say "⚠️ Data not found on DexScreener. Check CA."
+      3. If user is just CHATTING (saying 'hi', 'gm', 'who are you'): DO NOT SCAN. Just chat back in a cool, cyberpunk style.
+      4. Keep answers short (max 2-3 sentences).
+
+      MARKET DATA:
+      ${systemData || (isScanning ? "SCAN_FAILED" : "NO_SCAN_NEEDED")}
+    `;
+
     const msg = await anthropic.messages.create({
       model: "claude-3-haiku-20240307",
-      max_tokens: 800,
-      system: `You are Miko Terminal.
-      STATUS: ${connectionStatus}
-      
-      TASK:
-      Analyze the crypto data provided below.
-      
-      STYLE GUIDE:
-      - If [TERMINAL SCAN RESULT] exists: Act like a professional analyst. Comment on Liquidity, Volume, and Price action.
-      - If Price is UP: "Bullish divergence detected." / "Systems green."
-      - If Price is DOWN: "Bearish momentum." / "Rekt imminent."
-      - If NO DATA found: Say "Contract not found on scanner. Check CA."
-      - Keep it short, cool, cyberpunk style.
-
-      DATA INPUT:
-      ${systemData || "NO_MARKET_DATA_FOUND"}`,
+      max_tokens: 500,
+      system: systemPrompt,
       messages: [{ role: "user", content: message }],
     });
 
@@ -89,6 +77,6 @@ export async function POST(req: Request) {
 
   } catch (error) {
     console.error(error);
-    return NextResponse.json({ reply: "⚠️ SCAN ERROR. Manual override required." }, { status: 500 });
+    return NextResponse.json({ reply: "⚠️ SYSTEM ERROR." }, { status: 500 });
   }
 }
