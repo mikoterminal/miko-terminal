@@ -53,7 +53,11 @@ export default function Home() {
       {/* LOGO AREA */}
       <div className="mt-10 mb-6 text-center">
         <div className="w-24 h-24 bg-gradient-to-b from-green-900 to-black rounded-full mx-auto border-2 border-green-500 shadow-[0_0_20px_#22c55e] flex items-center justify-center overflow-hidden">
-           <span className="text-4xl">🤖</span>
+           <img 
+  src="/miko-logo.png" 
+  alt="Miko Terminal" 
+  className="w-full h-full object-cover" 
+/>
         </div>
         <h1 className="text-3xl font-bold mt-4 tracking-widest text-white">
           MIKO <span className="text-purple-500">TERMINAL</span>
