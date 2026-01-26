@@ -5,16 +5,17 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// FUNGSI BACA DATA (KITA PAKAI ENDPOINT KHUSUS TOKEN, LEBIH AKURAT)
+// FUNGSI CEK DATA YANG LEBIH STRICT (KETAT)
 async function getSolanaTokenData(ca: string) {
   try {
-    // Pakai endpoint spesifik token, bukan search biasa
+    // 1. Tembak langsung ke alamat token (Pasti Akurat)
     const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${ca}`);
     const data = await response.json();
 
+    // 2. Kalau kosong, langsung nyerah (Jangan maksa)
     if (!data.pairs || data.pairs.length === 0) return null;
 
-    // Ambil pair dengan likuiditas terbesar (paling valid)
+    // 3. Ambil pair yang valid (urutkan berdasarkan likuiditas tertinggi)
     const pair = data.pairs.sort((a: any, b: any) => b.liquidity.usd - a.liquidity.usd)[0];
 
     return {
@@ -24,6 +25,7 @@ async function getSolanaTokenData(ca: string) {
       price: pair.priceUsd,
       mcap: pair.fdv || 0,
       liquidity: pair.liquidity.usd,
+      vol24h: pair.volume.h24,
       change24h: pair.priceChange.h24,
       url: pair.url
     };
@@ -35,64 +37,66 @@ async function getSolanaTokenData(ca: string) {
 export async function POST(req: Request) {
   try {
     const { message } = await req.json();
+    let systemContext = "";
     
-    // 1. DETEKSI CA SOLANA (Format: 32-44 Karakter)
+    // REGEX: Deteksi CA Solana (Huruf acak 32-44 karakter)
     const solanaAddressRegex = /[1-9A-HJ-NP-Za-km-z]{32,44}/;
     const caMatch = message.match(solanaAddressRegex);
 
-    // DEFAULT DATA (Kalau user cuma ngobrol)
-    let systemContext = "User is just chatting. Reply casually.";
-
-    // 2. JIKA ADA CA, KITA SCAN!
     if (caMatch) {
+      // === KASUS 1: USER KIRIM CA ===
       const ca = caMatch[0];
       const tokenData = await getSolanaTokenData(ca);
       const bagsLink = `https://bags.fm/tokens/${ca}`;
 
       if (tokenData && tokenData.found) {
-        // SKENARIO A: DATA KETEMU (AKURAT)
+        // JIKA DATA ADA DI DEXSCREENER
         systemContext = `
-        [DATA_FOUND]
-        Token: ${tokenData.name} ($${tokenData.symbol})
-        Price: $${tokenData.price}
-        Mkt Cap: $${tokenData.mcap}
-        Liq: $${tokenData.liquidity}
-        24h Change: ${tokenData.change24h}%
-        Dex Link: ${tokenData.url}
-        Bags Link: ${bagsLink}
+        [STATUS: DATA_FOUND]
+        > TOKEN: ${tokenData.name} ($${tokenData.symbol})
+        > PRICE: $${tokenData.price}
+        > MCAP: $${tokenData.mcap}
+        > LIQ: $${tokenData.liquidity}
+        > LINK: ${tokenData.url}
+        > BAGS LINK: ${bagsLink}
         
-        INSTRUCTION: Display the stats above cleanly. Be professional.
+        INSTRUCTION: Present these stats cleanly.
         `;
       } else {
-        // SKENARIO B: DATA KOSONG (KOIN BARU LAHIR)
-        // KITA PAKSA DIA JUJUR, JANGAN NGARANG ANGKA!
+        // JIKA DATA KOSONG (TOKEN BARU LAHIR)
+        // KITA PAKSA MIKO JUJUR, JANGAN NGARANG ANGKA!
         systemContext = `
-        [DATA_NOT_FOUND]
-        CA: ${ca}
-        Status: Token is newly deployed or has low liquidity. DexScreener hasn't indexed it yet.
+        [STATUS: NOT_INDEXED]
+        > CA: ${ca}
+        > INFO: Token is too new. No trading data on DexScreener yet.
+        > ACTION: Provide the Official Bags Link below so user can check manually.
+        > OFFICIAL LINK: ${bagsLink}
         
-        INSTRUCTION: 
-        1. SAY STRICTLY: "⚠️ Token Data Not Synced Yet."
-        2. DO NOT INVENT A PRICE. DO NOT SAY "4321 CRED".
-        3. Provide this Official Bags Link: ${bagsLink}
+        INSTRUCTION: Say "⚠️ Token data not synced yet (Too New)." and provide the link. DO NOT INVENT PRICES.
         `;
       }
+    } else {
+      // === KASUS 2: NGOBROL BIASA ===
+      systemContext = "User is just chatting. Reply casually in Cyberpunk style.";
     }
 
-    // 3. KIRIM KE OTAK CLAUDE (DENGAN ANCAMAN BIAR NURUT)
+    // SYSTEM PROMPT: PENJAGA BIAR GAK HALU
+    const systemPrompt = `
+      You are Miko Terminal.
+      
+      RULES:
+      1. If [STATUS: DATA_FOUND], show the stats.
+      2. If [STATUS: NOT_INDEXED], give the BAGS LINK. Do NOT make up a price like "4321 CRED". 
+      3. Be concise.
+      
+      CONTEXT DATA:
+      ${systemContext}
+    `;
+
     const msg = await anthropic.messages.create({
       model: "claude-3-haiku-20240307",
       max_tokens: 500,
-      system: `You are Miko Terminal, a precise crypto analyzer.
-      
-      ABSOLUTE RULES:
-      1. If the input contains [DATA_FOUND], output the stats exactly as shown.
-      2. If the input contains [DATA_NOT_FOUND], tell the user the token is too new and give them the Link.
-      3. NEVER hallucinate prices. If you don't see a dollar sign in the data, DO NOT output a price.
-      4. Be concise. Cyberpunk style.
-      
-      CONTEXT:
-      ${systemContext}`,
+      system: systemPrompt,
       messages: [{ role: "user", content: message }],
     });
 
@@ -100,6 +104,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ reply: responseText });
 
   } catch (error) {
-    return NextResponse.json({ reply: "⚠️ SYSTEM CRITICAL ERROR." }, { status: 500 });
+    return NextResponse.json({ reply: "⚠️ SYSTEM ERROR." }, { status: 500 });
   }
 }
