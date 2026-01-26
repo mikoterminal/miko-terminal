@@ -10,17 +10,17 @@ async function getMarketData(query: string) {
     const cleanQuery = query.trim().replace(/\$/g, "");
     const response = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${cleanQuery}`);
     const data = await response.json();
-    if (!data.pairs || data.pairs.length === 0) return null;
-    const pair = data.pairs[0];
     
+    // Kalau DexScreener gak nemu data, return NULL (Jangan ngarang!)
+    if (!data.pairs || data.pairs.length === 0) return null;
+    
+    const pair = data.pairs[0];
     return `
-    [STATUS: FOUND]
+    [DATA FOUND]
     > NAME: ${pair.baseToken.name} (${pair.baseToken.symbol})
     > PRICE: $${pair.priceUsd}
-    > 24H: ${pair.priceChange.h24}%
-    > VOL: $${pair.volume.h24.toLocaleString()}
-    > LIQ: $${pair.liquidity.usd.toLocaleString()}
-    > LINK: ${pair.url}
+    > MKTCAP: $${pair.fdv}
+    > VOL 24H: $${pair.volume.h24.toLocaleString()}
     `;
   } catch (e) { return null; }
 }
@@ -30,36 +30,50 @@ export async function POST(req: Request) {
     const { message } = await req.json();
     let systemData = "";
     let detectedCA = "";
+    let bagsLink = "";
 
-    // 1. DETEKSI CA (Termasuk Address Bags yang akhiran "BAGS")
+    // 1. DETEKSI CA (Solana Address)
     const solanaAddressRegex = /[1-9A-HJ-NP-Za-km-z]{32,44}/;
     const caMatch = message.match(solanaAddressRegex);
 
     if (caMatch) {
       detectedCA = caMatch[0];
+      // Bikin Link Otomatis ke Website Bags
+      bagsLink = `https://bags.fm/tokens/${detectedCA}`; 
+      
       const marketInfo = await getMarketData(detectedCA);
-      // Kalau data ketemu, pakai data itu. Kalau gak, kasih link manual.
-      systemData = marketInfo || `[STATUS: NOT_FOUND] CA detected (${detectedCA}), but DexScreener hasn't indexed it yet (Too new/No Liquidity). CHECK MANUALLY: https://dexscreener.com/solana/${detectedCA}`;
+      
+      if (marketInfo) {
+        // SKENARIO 1: Data Ada di DexScreener
+        systemData = marketInfo + `\n> [OFFICIAL LINK]: ${bagsLink}`;
+      } else {
+        // SKENARIO 2: Data Belum Ada (Koin Baru Lahir)
+        systemData = `[STATUS: NEW_LAUNCH]
+        > CA: ${detectedCA}
+        > NOTE: Token is too new for global scanners.
+        > ACTION: Click the official link below to view live price on Bags.
+        > LINK: ${bagsLink}`;
+      }
     } 
-    // 2. Cek Ticker Biasa ($MIKO)
-    else if (message.includes("$") || message.toLowerCase().includes("price")) {
+    // 2. LOGIKA CHAT BIASA
+    else if (message.includes("$")) {
       const query = message.split(" ").find((w: string) => w.startsWith("$")) || message;
       const marketInfo = await getMarketData(query);
-      systemData = marketInfo || "[STATUS: FAILED] Ticker not found.";
+      systemData = marketInfo || "Token not found.";
     }
 
-    // 3. SYSTEM PROMPT (PERINTAH KERAS BIAR GAK HALUSINASI)
+    // 3. OTAK AI (DIPAKSA JUJUR)
     const systemPrompt = `
-      You are Miko, a Crypto Terminal.
+      You are Miko Terminal.
       
-      STRICT RULES:
-      1. IF [STATUS: FOUND]: Display the data clearly. Say "Target acquired."
-      2. IF [STATUS: NOT_FOUND]: Do NOT say "beep boop". SAY EXACTLY: "⚠️ Token not yet indexed by scanners. Likely too new. Check this link:" and paste the manual link provided in DATA FEED.
-      3. IF USER CHATS (Hi/Gm): Just reply casually ("System online", "Gm dev").
-      4. DO NOT make up fake prices.
+      CRITICAL RULES:
+      1. IF [DATA FOUND]: Show the stats.
+      2. IF [STATUS: NEW_LAUNCH]: Do NOT invent a price. Say "⚠️ Global data syncing..." and provide the [OFFICIAL LINK] from the data feed.
+      3. NEVER hallucinate/make up numbers like "4321 CRED". If data is missing, provide the link.
+      4. If user sends a CA, ALWAYS give them the bags.fm link.
 
       DATA FEED:
-      ${systemData || "USER_IS_JUST_CHATTING"}
+      ${systemData || "User is chatting casually."}
     `;
 
     const msg = await anthropic.messages.create({
